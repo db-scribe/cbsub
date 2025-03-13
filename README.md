@@ -1,5 +1,7 @@
 # cbsub
 
+[![Rust](https://github.com/db-scribe/cbsub/actions/workflows/rust.yml/badge.svg)](https://github.com/db-scribe/cbsub/actions/workflows/rust.yml)
+
 **cbsub** is a command-line utility written in Rust that processes a text file containing variables and substitutes them with specified values before copying the final output to the clipboard. It supports both multiple and single variable substitutions, previewing results, and listing variables in the input file.
 
 ## Features
