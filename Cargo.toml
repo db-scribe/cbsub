@@ -1,0 +1,8 @@
+[package]
+name = "cbsub"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "4.5.32"
+regex = "1.11.1"

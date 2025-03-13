@@ -1,9 +1,9 @@
-use clap::{Arg, App};
+use clap::{Arg, Command};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Command as ProcessCommand, Stdio};
 use std::error::Error;
 
 /// Copies the provided text to the system clipboard.
@@ -13,20 +13,20 @@ use std::error::Error;
 /// - Linux: assumes `xclip` is installed.
 fn copy_to_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
     if cfg!(target_os = "macos") {
-        let mut process = Command::new("pbcopy")
+        let mut process = ProcessCommand::new("pbcopy")
             .stdin(Stdio::piped())
             .spawn()?;
         process.stdin.as_mut().unwrap().write_all(text.as_bytes())?;
         process.wait()?;
     } else if cfg!(target_os = "windows") {
-        let mut process = Command::new("clip")
+        let mut process = ProcessCommand::new("clip")
             .stdin(Stdio::piped())
             .spawn()?;
         process.stdin.as_mut().unwrap().write_all(text.as_bytes())?;
         process.wait()?;
     } else {
         // Assume Linux and that xclip is installed.
-        let mut process = Command::new("xclip")
+        let mut process = ProcessCommand::new("xclip")
             .arg("-selection")
             .arg("clipboard")
             .stdin(Stdio::piped())
@@ -90,34 +90,33 @@ fn get_single_substitution(variables: &HashSet<String>, pos_value: Option<&str>)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("cbsub")
+    let matches = Command::new("cbsub")
         .version("1.0")
         .about("Substitutes variables in a prompt file and copies the result to the clipboard")
         .arg(Arg::new("file")
-             .about("The prompt file to process")
+             .help("The prompt file to process")
              .required(true)
              .index(1))
         .arg(Arg::new("value")
-             .about("Substitution value for a single variable (when exactly one exists)")
+             .help("Substitution value for a single variable (when exactly one exists)")
              .required(false)
              .index(2))
         .arg(Arg::new("substitution")
              .short('s')
              .long("substitution")
-             .about("Substitute a variable in key=value format (can be used multiple times)")
-             .takes_value(true)
-             .multiple_occurrences(true))
+             .help("Substitute a variable in key=value format (can be used multiple times)")
+             .action(clap::ArgAction::Append))
         .arg(Arg::new("preview")
              .short('p')
-             .about("Preview the processed text without copying to the clipboard")
-             .takes_value(false))
+             .help("Preview the processed text without copying to the clipboard")
+             .action(clap::ArgAction::SetTrue))
         .arg(Arg::new("list")
              .short('l')
-             .about("List the variables found in the prompt file")
-             .takes_value(false))
+             .help("List the variables found in the prompt file")
+             .action(clap::ArgAction::SetTrue))
         .get_matches();
 
-    let file_path = matches.value_of("file").unwrap();
+    let file_path = matches.get_one::<String>("file").unwrap();
     let content = fs::read_to_string(file_path)
         .map_err(|_| format!("Error: Could not read file '{}'", file_path))?;
 
@@ -125,7 +124,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let variables = extract_variables(&content);
 
     // If -l flag is provided, list the variables and exit.
-    if matches.is_present("list") {
+    if matches.get_flag("list") {
         if variables.is_empty() {
             println!("No variables found in the prompt file.");
         } else {
@@ -139,7 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Build substitutions from -s flags.
     let mut substitutions: HashMap<String, String> = HashMap::new();
-    if let Some(subs) = matches.values_of("substitution") {
+    if let Some(subs) = matches.get_many::<String>("substitution") {
         for sub in subs {
             let (key, value) = parse_substitution(sub)?;
             substitutions.insert(key, value);
@@ -147,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Handle positional substitution (only allowed if no -s flag is provided).
-    if let Some(pos_value) = matches.value_of("value") {
+    if let Some(pos_value) = matches.get_one::<String>("value") {
         if !substitutions.is_empty() {
             eprintln!("Error: Cannot use positional substitution and -s flag together.");
             return Err("Ambiguous substitution".into());
@@ -181,7 +180,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let result = process_content(&content, &substitutions);
 
     // If the preview flag (-p) is set, display the result instead of copying.
-    if matches.is_present("preview") {
+    if matches.get_flag("preview") {
         println!("{}", result);
     } else {
         copy_to_clipboard(&result)?;
