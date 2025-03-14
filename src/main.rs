@@ -27,14 +27,39 @@ fn copy_to_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
     } else {
         // Assume Linux and that xclip is installed.
         let mut process = ProcessCommand::new("xclip")
-            .arg("-selection")
-            .arg("clipboard")
+            .args(&["-selection", "clipboard"])
             .stdin(Stdio::piped())
             .spawn()?;
         process.stdin.as_mut().unwrap().write_all(text.as_bytes())?;
         process.wait()?;
     }
     Ok(())
+}
+
+/// Reads text from the system clipboard.
+/// Uses platform-specific commands:
+/// - macOS: `pbpaste`
+/// - Windows: PowerShell's `Get-Clipboard`
+/// - Linux: assumes `xclip` is installed.
+fn read_from_clipboard() -> Result<String, Box<dyn Error>> {
+    let output = if cfg!(target_os = "macos") {
+        ProcessCommand::new("pbpaste").output()?
+    } else if cfg!(target_os = "windows") {
+        ProcessCommand::new("powershell")
+            .args(&["-Command", "Get-Clipboard"])
+            .output()?
+    } else {
+        // Assume Linux with xclip installed.
+        ProcessCommand::new("xclip")
+            .args(&["-selection", "clipboard", "-o"])
+            .output()?
+    };
+
+    if !output.status.success() {
+        return Err("Error: Unable to read from clipboard".into());
+    }
+    let text = String::from_utf8(output.stdout)?;
+    Ok(text)
 }
 
 /// Extracts variables from the given content.
@@ -97,10 +122,17 @@ fn main() -> Result<(), Box<dyn Error>> {
              .help("The prompt file to process")
              .required(true)
              .index(1))
+        // The positional argument for a single substitution.
         .arg(Arg::new("value")
              .help("Substitution value for a single variable (when exactly one exists)")
              .required(false)
              .index(2))
+        // New clipboard flag: if set, use clipboard contents as substitution.
+        .arg(Arg::new("clipboard")
+             .short('c')
+             .long("clipboard")
+             .help("Use clipboard content as the substitution value (for a file with a single variable)")
+             .action(clap::ArgAction::SetTrue))
         .arg(Arg::new("substitution")
              .short('s')
              .long("substitution")
@@ -136,17 +168,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Build substitutions from -s flags.
     let mut substitutions: HashMap<String, String> = HashMap::new();
-    if let Some(subs) = matches.get_many::<String>("substitution") {
+
+    // Check for clipboard flag.
+    if matches.get_flag("clipboard") {
+        if matches.get_one::<String>("value").is_some() || matches.contains_id("substitution") {
+            eprintln!("Error: Cannot use the --clipboard flag with other substitution methods.");
+            return Err("Ambiguous substitution".into());
+        }
+        let clip_value = read_from_clipboard()?;
+        let single_subs = get_single_substitution(&variables, Some(&clip_value))?;
+        substitutions.extend(single_subs);
+    }
+    // Build substitutions from -s flags.
+    else if let Some(subs) = matches.get_many::<String>("substitution") {
         for sub in subs {
             let (key, value) = parse_substitution(sub)?;
             substitutions.insert(key, value);
         }
     }
-
-    // Handle positional substitution (only allowed if no -s flag is provided).
-    if let Some(pos_value) = matches.get_one::<String>("value") {
+    // Handle positional substitution.
+    else if let Some(pos_value) = matches.get_one::<String>("value") {
         if !substitutions.is_empty() {
             eprintln!("Error: Cannot use positional substitution and -s flag together.");
             return Err("Ambiguous substitution".into());
@@ -155,7 +197,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("Error: No variables found in the prompt file to substitute.");
             return Err("No variables found".into());
         }
-        // Try to build a substitution map from the positional value.
         let single_subs = get_single_substitution(&variables, Some(pos_value))?;
         substitutions.extend(single_subs);
     }
